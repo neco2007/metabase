@@ -13,7 +13,7 @@ const VCComponent = ({ userId, token }) => {
   const [status, setStatus] = useState({ message: '未接続', isError: false });
   
   // エンドポイント設定
-  const API_BASE = '/api/v1';
+  const API_BASE = 'http://<VPSのIP>:8099/api/v1'; // ←ここを修正
   const SIGNAL_URL = `${API_BASE}/signaling`;
   const SSE_URL = `${API_BASE}/notifications`;
 
