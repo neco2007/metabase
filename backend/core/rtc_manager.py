@@ -1,29 +1,36 @@
 from aiortc import RTCPeerConnection, RTCConfiguration, RTCIceServer
-from typing import Set
+from typing import Dict, Set
 
-# アクティブな接続を管理するセット
-active_connections: Set[RTCPeerConnection] = set()
+# ユーザーIDごとにPeerConnectionを永続化
+_user_pcs: Dict[str, RTCPeerConnection] = {}
 
-def create_peer_connection() -> RTCPeerConnection:
-    """
-    設定済みのRTCPeerConnectionを生成し、管理リストに追加します。
-    """
+def get_or_create_pc(user_id: str) -> RTCPeerConnection:
+    """ユーザーに紐づいたPeerConnectionを返却、存在しなければ作成します。"""
+    if user_id in _user_pcs:
+        pc = _user_pcs[user_id]
+        # すでに終了している場合は削除して作り直し
+        if pc.connectionState not in ["closed", "failed"]:
+            return pc
+            
+    return _initialize_new_pc(user_id)
+
+def _initialize_new_pc(user_id: str) -> RTCPeerConnection:
+    """新しいPeerConnectionを生成し、管理リストに登録します。"""
     config = RTCConfiguration(
         iceServers=[RTCIceServer(urls="stun:stun.l.google.com:19302")]
     )
     pc = RTCPeerConnection(configuration=config)
-    active_connections.add(pc)
+    _user_pcs[user_id] = pc
     
-    # 接続終了時にセットから自動削除されるように設定
     @pc.on("connectionstatechange")
-    def _auto_remove() -> None:
+    def on_state_change():
         if pc.connectionState in ["closed", "failed"]:
-            active_connections.discard(pc)
+            _user_pcs.pop(user_id, None)
             
     return pc
 
 async def cleanup_all_connections() -> None:
-    """サーバー停止時などに全ての接続を安全に終了させます。"""
-    for pc in list(active_connections):
+    """全接続をクローズします。"""
+    for pc in list(_user_pcs.values()):
         await pc.close()
-    active_connections.clear()
+    _user_pcs.clear()
