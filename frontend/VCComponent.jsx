@@ -1,27 +1,22 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { WebRTCClient } from './WebRTCClient';
 import VideoItem from './VideoItem';
 
 /**
  * 2025年次世代WebRTCビデオチャットコンポーネント
- * メタバース学校への即時導入を想定した柔軟なUI設計
+ * 自動接続・ニックネーム管理対応版
  */
 const VCComponent = ({ userId, token }) => {
-  // --- 状態管理 ---
   const [client] = useState(() => new WebRTCClient());
   const [streams, setStreams] = useState({ local: null, screen: null, remotes: {} });
-  const [status, setStatus] = useState({ message: '未接続', isError: false });
-  
-  // エンドポイント設定
-  const API_BASE = 'http://163.44.110.157:8099'; // ←ここを修正
-  const SIGNAL_URL = `${API_BASE}/signaling`;
-  const SSE_URL = `${API_BASE}/notifications`;
+  const [status, setStatus] = useState({ message: '準備中...', isError: false });
+  const [nickname, setNickname] = useState('ゲスト'); // デフォルト名
 
-  // --- メディア制御関数 ---
+  // エンドポイント設定 (必ず /api/v1 を含めてください)
+  const API_BASE = 'http://163.44.110.157:8099';
+  const SIGNAL_URL = `${API_BASE}/api/v1/signaling`; 
+  const SSE_URL = `${API_BASE}/api/v1/notifications`;
 
-  /**
-   * リモートトラック受信時のコールバック
-   */
   const handleTrack = useCallback((peerId, stream) => {
     setStreams(prev => ({
       ...prev,
@@ -29,150 +24,77 @@ const VCComponent = ({ userId, token }) => {
     }));
   }, []);
 
-  /**
-   * ビデオ会議への参加処理
-   */
-  const joinSession = async () => {
+  // 自動接続ロジック
+  const autoJoin = useCallback(async () => {
     try {
       updateStatus('接続中...', false);
       const localStream = await client.startLocalStream();
-      
       setStreams(prev => ({ ...prev, local: localStream }));
-      client.onTrackCallback = handleTrack;
       
+      client.onTrackCallback = handleTrack;
       await client.createAndExchange('server_peer', SIGNAL_URL, token);
       updateStatus('接続完了', false);
     } catch (err) {
       updateStatus(`接続失敗: ${err.message}`, true);
     }
-  };
+  }, [client, handleTrack, SIGNAL_URL, token]);
 
-  /**
-   * 画面共有の開始/停止切り替え
-   */
-  const handleToggleScreen = async () => {
-    try {
-      if (streams.screen) {
-        await client.stopScreenShare(SIGNAL_URL, token);
-        setStreams(prev => ({ ...prev, screen: null }));
-      } else {
-        const screenStream = await client.addScreenShare(SIGNAL_URL, token);
-        setStreams(prev => ({ ...prev, screen: screenStream }));
-      }
-    } catch (err) {
-      updateStatus(`画面共有エラー: ${err.message}`, true);
-    }
-  };
-
-  // --- ユーティリティ ---
-
-  const updateStatus = (msg, isErr) => {
-    setStatus({ message: msg, isError: isErr });
-    if (isErr) console.error(`[VC_ERROR] ${msg}`);
-  };
-
-  // --- ライフサイクル (SSE連携) ---
-
+  // マウント時に即時実行
   useEffect(() => {
-    // 接続完了後、サーバーからの更新通知を待機
+    autoJoin();
+  }, [autoJoin]);
+
+  // SSE連携
+  useEffect(() => {
     if (status.message !== '接続完了') return;
-
     const eventSource = new EventSource(`${SSE_URL}?token=${token}`);
-
     eventSource.onmessage = async (event) => {
       const data = JSON.parse(event.data);
       if (data.type === 'renegotiate_needed') {
-        console.log('再ネゴシエーション通知を受信: 更新を開始します');
         await client.createAndExchange('server_peer', SIGNAL_URL, token);
       }
     };
-
-    eventSource.onerror = () => {
-      console.warn('SSE切断。再接続を試みます...');
-      eventSource.close();
-    };
-
     return () => eventSource.close();
-  }, [status.message, token, client]);
+  }, [status.message, token, client, SIGNAL_URL, SSE_URL]);
 
-  // --- レンダリング ---
+  const updateStatus = (msg, isErr) => {
+    setStatus({ message: msg, isError: isErr });
+  };
 
   return (
     <div className="vc-container">
-      <header className={`status-banner ${status.isError ? 'error' : ''}`}>
-        {status.message}
+      <header className="vc-header">
+        <div className={`status-badge ${status.isError ? 'error' : ''}`}>
+          {status.message}
+        </div>
+        <div className="nickname-input-group">
+          <span>表示名:</span>
+          <input 
+            type="text" 
+            value={nickname} 
+            onChange={(e) => setNickname(e.target.value)} 
+            placeholder="ニックネームを入力"
+          />
+        </div>
       </header>
 
       <main className="video-grid">
-        {/* ローカル映像（カメラ） */}
         {streams.local && (
-          <VideoItem stream={streams.local} label="自分 (カメラ)" isMuted={true} />
+          <VideoItem stream={streams.local} label={`${nickname} (あなた)`} isMuted={true} />
         )}
-        
-        {/* ローカル映像（画面共有） */}
-        {streams.screen && (
-          <VideoItem stream={streams.screen} label="共有中" isMuted={true} />
-        )}
-
-        {/* 他参加者の映像 */}
         {Object.entries(streams.remotes).map(([id, stream]) => (
           <VideoItem key={id} stream={stream} label={`参加者: ${id}`} />
         ))}
       </main>
 
-      <footer className="control-bar">
-        <button onClick={joinSession} className="btn-join">授業に参加</button>
-        <button 
-          onClick={handleToggleScreen} 
-          className={`btn-screen ${streams.screen ? 'active' : ''}`}
-        >
-          {streams.screen ? '共有停止' : '画面共有'}
-        </button>
-      </footer>
-
-      <style jsx>{`
-        .vc-container {
-          display: flex;
-          flex-direction: column;
-          height: 100%;
-          background: #0f172a;
-          color: white;
-          font-family: 'Inter', sans-serif;
-        }
-        .status-banner {
-          padding: 8px;
-          text-align: center;
-          background: #1e293b;
-          font-size: 0.9rem;
-        }
-        .status-banner.error { background: #991b1b; }
-        .video-grid {
-          flex: 1;
-          display: grid;
-          grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-          gap: 1rem;
-          padding: 1rem;
-          overflow-y: auto;
-        }
-        .control-bar {
-          display: flex;
-          justify-content: center;
-          gap: 1.5rem;
-          padding: 1.5rem;
-          background: #1e293b;
-        }
-        button {
-          padding: 10px 24px;
-          border-radius: 8px;
-          border: none;
-          cursor: pointer;
-          font-weight: 600;
-          transition: all 0.2s;
-        }
-        .btn-join { background: #3b82f6; color: white; }
-        .btn-join:hover { background: #2563eb; }
-        .btn-screen { background: #475569; color: white; }
-        .btn-screen.active { background: #ef4444; }
+      <style>{`
+        .vc-container { display: flex; flex-direction: column; height: 100vh; background: #0f172a; color: white; }
+        .vc-header { display: flex; justify-content: space-between; align-items: center; padding: 10px 20px; background: #1e293b; }
+        .status-badge { padding: 4px 12px; border-radius: 20px; background: #3b82f6; font-size: 0.8rem; }
+        .status-badge.error { background: #ef4444; }
+        .nickname-input-group { display: flex; align-items: center; gap: 10px; }
+        .nickname-input-group input { background: #334155; border: 1px solid #475569; color: white; padding: 5px 10px; border-radius: 4px; }
+        .video-grid { flex: 1; display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1rem; padding: 1rem; }
       `}</style>
     </div>
   );
