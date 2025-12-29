@@ -1,17 +1,22 @@
 import logging
 from aiortc import RTCPeerConnection, MediaStreamTrack
-# 修正：絶対パスでのインポート
+# 絶対パスでのインポート
 from backend.core.track_manager import register_track
 
 logger = logging.getLogger("rtc_media")
 
-def attach_media_handlers(pc: RTCPeerConnection, user_id: str) -> None:
+def attach_media_handlers(pc: RTCPeerConnection, user_id: str, room_id: str) -> None:
+    """
+    PeerConnectionのメディア状態を監視し、受信したトラックを管理下に登録します。
+    """
     @pc.on("track")
     def on_track(track: MediaStreamTrack) -> None:
-        logger.info(f"受信: {track.kind} from {user_id}")
-        register_track(user_id, track)
+        logger.info(f"受信開始: {track.kind} from {user_id} in Room {room_id}")
+        # 修正ポイント: 引数を3つ(room_id, user_id, track)正しく渡す
+        register_track(room_id, user_id, track)
 
     @pc.on("connectionstatechange")
     async def on_state_change() -> None:
+        logger.info(f"Connection State: {user_id} -> {pc.connectionState}")
         if pc.connectionState in ["failed", "closed"]:
-            logger.info(f"接続終了: {user_id}")
+            logger.info(f"接続終了または失敗: {user_id}")
