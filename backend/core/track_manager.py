@@ -1,34 +1,41 @@
 import logging
-from typing import Dict, List, Set
+from typing import Dict, List
 from aiortc import MediaStreamTrack
 
 logger = logging.getLogger("rtc_tracks")
 
-# ユーザーIDごとのトラックリストを保持 { user_id: [track1, track2, ...] }
-_user_tracks: Dict[str, List[MediaStreamTrack]] = {}
+# { room_id: { user_id: [tracks] } }
+_room_tracks: Dict[str, Dict[str, List[MediaStreamTrack]]] = {}
 
-def register_track(user_id: str, track: MediaStreamTrack) -> None:
-    """ユーザーのトラックをレジストリに登録します。"""
-    if user_id not in _user_tracks:
-        _user_tracks[user_id] = []
+def register_track(room_id: str, user_id: str, track: MediaStreamTrack) -> None:
+    """ルームとユーザーに関連付けてトラックを登録します。"""
+    if room_id not in _room_tracks:
+        _room_tracks[room_id] = {}
+    if user_id not in _room_tracks[room_id]:
+        _room_tracks[room_id][user_id] = []
     
-    _user_tracks[user_id].append(track)
-    logger.info(f"Track登録完了: User={user_id}, Kind={track.kind}")
+    _room_tracks[room_id][user_id].append(track)
+    logger.info(f"Track登録: Room={room_id}, User={user_id}, Kind={track.kind}")
 
     @track.on("ended")
     def on_ended() -> None:
-        remove_user_tracks(user_id)
+        remove_user_tracks(room_id, user_id)
 
-def remove_user_tracks(user_id: str) -> None:
-    """ユーザーに関連付けられた全てのトラックを削除します。"""
-    if user_id in _user_tracks:
-        _user_tracks.pop(user_id)
-        logger.info(f"User={user_id} の全トラックを削除しました。")
+def remove_user_tracks(room_id: str, user_id: str) -> None:
+    """特定のルームからユーザーのトラックを削除します。"""
+    if room_id in _room_tracks and user_id in _room_tracks[room_id]:
+        _room_tracks[room_id].pop(user_id)
+        if not _room_tracks[room_id]:
+            _room_tracks.pop(room_id)
+        logger.info(f"Track削除: Room={room_id}, User={user_id}")
 
-def get_remote_tracks(exclude_user_id: str) -> List[MediaStreamTrack]:
-    """自分以外の全ユーザーのトラックリストを取得します。"""
+def get_remote_tracks(room_id: str, exclude_user_id: str) -> List[MediaStreamTrack]:
+    """同じルームにいる「自分以外」の全トラックを取得します。"""
     all_remote_tracks: List[MediaStreamTrack] = []
-    for uid, tracks in _user_tracks.items():
+    if room_id not in _room_tracks:
+        return all_remote_tracks
+
+    for uid, tracks in _room_tracks[room_id].items():
         if uid != exclude_user_id:
             all_remote_tracks.extend(tracks)
     return all_remote_tracks

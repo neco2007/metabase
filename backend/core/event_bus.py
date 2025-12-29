@@ -1,33 +1,40 @@
 import asyncio
 import logging
-from typing import Dict, Set
+from typing import Dict
 
 logger = logging.getLogger("rtc_event_bus")
 
 class EventBus:
-    """サーバー内部のイベント配信を管理するクラス"""
+    """ルーム単位でのイベント配信を管理するクラス"""
     def __init__(self) -> None:
-        # ユーザーIDごとのキューを保持
-        self.queues: Dict[str, asyncio.Queue] = {}
+        # { room_id: { user_id: queue } }
+        self.rooms: Dict[str, Dict[str, asyncio.Queue]] = {}
 
-    async def subscribe(self, user_id: str) -> asyncio.Queue:
-        """ユーザーごとのイベントキューを作成し、購読を開始します。"""
+    async def subscribe(self, room_id: str, user_id: str) -> asyncio.Queue:
+        """指定したルームのイベントを購読します。"""
+        if room_id not in self.rooms:
+            self.rooms[room_id] = {}
+        
         queue: asyncio.Queue = asyncio.Queue()
-        self.queues[user_id] = queue
-        logger.info(f"SSE Subscribed: {user_id}")
+        self.rooms[room_id][user_id] = queue
+        logger.info(f"SSE Subscribed: Room={room_id}, User={user_id}")
         return queue
 
-    def unsubscribe(self, user_id: str) -> None:
-        """購読を停止し、リソースを解放します。"""
-        if user_id in self.queues:
-            del self.queues[user_id]
-            logger.info(f"SSE Unsubscribed: {user_id}")
+    def unsubscribe(self, room_id: str, user_id: str) -> None:
+        """購読を停止します。"""
+        if room_id in self.rooms and user_id in self.rooms[room_id]:
+            del self.rooms[room_id][user_id]
+            if not self.rooms[room_id]: # 部屋が空なら削除
+                del self.rooms[room_id]
+            logger.info(f"SSE Unsubscribed: Room={room_id}, User={user_id}")
 
-    async def broadcast(self, message: dict, exclude_user: str | None = None) -> None:
-        """全接続ユーザー（特定のユーザーを除く）にイベントを送信します。"""
-        for uid, queue in self.queues.items():
+    async def broadcast(self, room_id: str, message: dict, exclude_user: str | None = None) -> None:
+        """同じルーム内の全ユーザー（特定ユーザーを除く）に通知を送ります。"""
+        if room_id not in self.rooms:
+            return
+
+        for uid, queue in self.rooms[room_id].items():
             if uid != exclude_user:
                 await queue.put(message)
 
-# シングルトンインスタンスとしてエクスポート
 bus = EventBus()
