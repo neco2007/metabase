@@ -1,10 +1,10 @@
 import uvicorn
 import logging
 from fastapi import FastAPI, HTTPException, Header
+from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional
 from contextlib import asynccontextmanager
 
-# インポートパスの統一
 from backend.api.v1.signaling import signaling_handler
 from backend.api.v1.notifications import router as sse_router
 from backend.core.rtc_manager import create_peer_connection, cleanup_all_connections
@@ -17,6 +17,16 @@ async def lifespan(app: FastAPI):
     await cleanup_all_connections()
 
 app = FastAPI(lifespan=lifespan)
+
+# --- 【修正】CORSミドルウェアの追加 ---
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"], # 開発時はすべて許可
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 app.include_router(sse_router)
 
 @app.post("/api/v1/signaling")
