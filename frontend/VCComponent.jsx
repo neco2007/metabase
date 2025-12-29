@@ -35,19 +35,34 @@ const VCComponent = ({ userId, token, locationName }) => {
   }, [client, handleTrack, SIGNAL_URL, token, locationName]);
 
   useEffect(() => {
-    joinSession();
+    const init = async () => {
+      if (!locationName) return;
+      try {
+        const stream = await client.startLocalStream();
+        setStreams(prev => ({ ...prev, local: stream }));
+        client.onTrackCallback = handleTrack;
+        
+        // ルームIDを送信
+        await client.createAndExchange('server_peer', SIGNAL_URL, token, { room_id: locationName });
+        setStatus({ message: `${locationName} で通話中`, isError: false });
+      } catch (err) {
+        setStatus({ message: `接続失敗: ${err.message}`, isError: true });
+      }
+    };
+    init();
+
+    // SSE接続 (日本語の文字化け対策で encodeURIComponent を使用)
+    const encodedRoom = encodeURIComponent(locationName);
+    const eventSource = new EventSource(`${SSE_URL}?room_id=${encodedRoom}&token=${token}`);
     
-    // SSE接続 (room_idを正しく渡す)
-    const eventSource = new EventSource(`${SSE_URL}?room_id=${locationName}&token=${token}`);
     eventSource.onmessage = async (event) => {
       const data = JSON.parse(event.data);
       if (data.type === 'renegotiate_needed') {
-        console.log('他ユーザーの入室を検知。更新します。');
         await client.createAndExchange('server_peer', SIGNAL_URL, token, { room_id: locationName });
       }
     };
     return () => eventSource.close();
-  }, [joinSession, locationName, token, SSE_URL, SIGNAL_URL, client]);
+  }, [locationName, token, SIGNAL_URL, SSE_URL, client, handleTrack]);
 
   const updateStatus = (msg, isErr) => {
     setStatus({ message: msg, isError: isErr });
