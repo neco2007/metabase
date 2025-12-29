@@ -1,22 +1,27 @@
-from fastapi import FastAPI, HTTPException, Header
-from api.v1.signaling import signaling_handler
-from core.rtc_manager import create_peer_connection
-from typing import Optional
 import uvicorn
+import logging
+from fastapi import FastAPI, HTTPException, Header
+from typing import Optional
+from contextlib import asynccontextmanager
 
-app = FastAPI()
+# インポートパスの統一
+from backend.api.v1.signaling import signaling_handler
+from backend.api.v1.notifications import router as sse_router
+from backend.core.rtc_manager import create_peer_connection, cleanup_all_connections
+
+logging.basicConfig(level=logging.INFO)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    yield
+    await cleanup_all_connections()
+
+app = FastAPI(lifespan=lifespan)
+app.include_router(sse_router)
 
 @app.post("/api/v1/signaling")
-async def signaling_endpoint(
-    offer: dict, 
-    authorization: Optional[str] = Header(None)
-):
-    """
-    SDP Offerを受け取り、転送処理を含むAnswerを返します。
-    """
-    # 2025年仕様: 接続ごとに独立したPCを生成
+async def signaling_endpoint(offer: dict, authorization: Optional[str] = Header(None)):
     pc = create_peer_connection()
-    
     try:
         return await signaling_handler(offer, pc, authorization)
     except HTTPException as e:
@@ -25,4 +30,4 @@ async def signaling_endpoint(
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
