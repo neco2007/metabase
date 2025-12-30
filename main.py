@@ -38,30 +38,22 @@ app.add_middleware(
 app.include_router(sse_router)
 
 @app.post("/api/v1/signaling")
-async def signaling_endpoint(
-    offer: dict, 
-    authorization: Optional[str] = Header(None)
-):
-    """
-    SDP Offerを受信し、ユーザー固有のPeerConnectionを介してAnswerを返します。
-    """
-    # 1. 認証とユーザーIDの取得
+async def signaling_endpoint(offer: dict, authorization: Optional[str] = Header(None)):
     token = authorization.replace("Bearer ", "") if authorization else ""
     payload = verify_access_token(token)
-    if not payload:
-        raise HTTPException(status_code=401, detail="認証エラー")
+    if not payload: raise HTTPException(status_code=401)
     
     user_id = payload["user_id"]
-
+    pc = get_or_create_pc(user_id)
+    
     try:
-        # 2. 接続の取得または新規作成（再利用によりデコードエラーを防止）
-        pc = get_or_create_pc(user_id)
-        
-        # 3. シグナリング処理の実行
         return await signaling_handler(offer, pc, authorization)
-    except HTTPException as e:
-        raise e
     except Exception as e:
+        # 【修正ポイント】終了・失敗時は正常レスポンスを返すようにし、エラー扱いにしない
+        if pc.connectionState in ["failed", "closed"]:
+            logger.info(f"ユーザー {user_id} のシグナリングを正常にクローズしました。")
+            return {"type": "answer", "sdp": "", "status": "closed"}
+        
         logger.exception(f"Signaling Error for {user_id}")
         raise HTTPException(status_code=500, detail=str(e))
 
