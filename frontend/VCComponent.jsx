@@ -50,13 +50,25 @@ const VCComponent = ({ userId, token, locationName }) => {
   const toggleScreen = async () => {
     try {
       if (streams.screen) {
+        // 停止時はステータスを更新せず「通話中」を維持する
         await client.stopScreenShare(SIGNAL_URL, token, { room_id: locationName });
         setStreams(prev => ({ ...prev, screen: null }));
       } else {
         const stream = await client.addScreenShare(SIGNAL_URL, token, { room_id: locationName });
+        
+        // ブラウザの「共有停止」ボタンが押された時の同期処理
+        stream.getVideoTracks()[0].onended = () => {
+            setStreams(prev => ({ ...prev, screen: null }));
+        };
+        
         setStreams(prev => ({ ...prev, screen: stream }));
       }
     } catch (err) {
+      // ユーザーによるキャンセルや停止時の例外は無視する
+      if (err.message.includes("Permission denied") || err.message.includes("cancel")) {
+        console.log("画面共有がキャンセルまたは停止されました");
+        return;
+      }
       setStatus({ message: `画面共有エラー: ${err.message}`, isError: true });
     }
   };
