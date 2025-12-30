@@ -2,18 +2,17 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { WebRTCClient } from './WebRTCClient';
 import VideoItem from './VideoItem';
 
-/**
- * 2025年次世代WebRTCビデオチャットコンポーネント
- * 自動接続・ルーム隔離・画面共有対応版
- */
 const VCComponent = ({ userId, token, locationName }) => {
   const [client] = useState(() => new WebRTCClient());
   const [streams, setStreams] = useState({ local: null, screen: null, remotes: {} });
-  const [status, setStatus] = useState({ message: '初期化中...', isError: false });
+  const [status, setStatus] = useState({ message: '準備中...', isError: false });
+  const [mediaStates, setMediaStates] = useState({ mic: true, cam: true });
 
-  const API_BASE = 'http://163.44.110.157:8099/api/v1';
+  const API_BASE = 'http://163.44.110.157:8099/api/v1'; // ConohaVPS IP
   const SIGNAL_URL = `${API_BASE}/signaling`;
   const SSE_URL = `${API_BASE}/notifications`;
+
+  // --- メディア処理 ---
 
   const handleTrack = useCallback((peerId, stream) => {
     setStreams(prev => ({
@@ -22,102 +21,103 @@ const VCComponent = ({ userId, token, locationName }) => {
     }));
   }, []);
 
-  const updateStatus = (msg, isErr) => {
-    setStatus({ message: msg, isError: isErr });
+  const toggleMedia = (type) => {
+    const isEnabled = !mediaStates[type];
+    const tracks = type === 'mic' 
+      ? streams.local?.getAudioTracks() 
+      : streams.local?.getVideoTracks();
+    
+    tracks?.forEach(t => (t.enabled = isEnabled));
+    setMediaStates(prev => ({ ...prev, [type]: isEnabled }));
   };
 
-  /**
-   * 授業（セッション）への自動参加処理
-   */
+  // --- 通信ロジック ---
+
   const joinSession = useCallback(async () => {
     if (!locationName) return;
     try {
-      updateStatus(`${locationName} に接続中...`, false);
       const localStream = await client.startLocalStream();
       setStreams(prev => ({ ...prev, local: localStream }));
       
       client.onTrackCallback = handleTrack;
-      // room_id として場所名をサーバーへ送信
       await client.createAndExchange('server_peer', SIGNAL_URL, token, { room_id: locationName });
-      updateStatus(`${locationName} で通話中`, false);
+      setStatus({ message: `${locationName} で通話中`, isError: false });
     } catch (err) {
-      updateStatus(`接続失敗: ${err.message}`, true);
+      setStatus({ message: `接続失敗: ${err.message}`, isError: true });
     }
   }, [client, handleTrack, SIGNAL_URL, token, locationName]);
 
-  /**
-   * 画面共有の切り替え
-   */
-  const toggleScreenShare = async () => {
+  const toggleScreen = async () => {
     try {
       if (streams.screen) {
-        // 停止処理
         await client.stopScreenShare(SIGNAL_URL, token, { room_id: locationName });
         setStreams(prev => ({ ...prev, screen: null }));
       } else {
-        // 開始処理
         const stream = await client.addScreenShare(SIGNAL_URL, token, { room_id: locationName });
         setStreams(prev => ({ ...prev, screen: stream }));
       }
     } catch (err) {
-      updateStatus(`画面共有エラー: ${err.message}`, true);
+      setStatus({ message: `画面共有エラー: ${err.message}`, isError: true });
     }
   };
 
+  // --- ライフサイクル ---
+
   useEffect(() => {
     joinSession();
-    
     const encodedRoom = encodeURIComponent(locationName);
     const eventSource = new EventSource(`${SSE_URL}?room_id=${encodedRoom}&token=${token}`);
     
-    eventSource.onmessage = async (event) => {
-      const data = JSON.parse(event.data);
+    eventSource.onmessage = async (e) => {
+      const data = JSON.parse(e.data);
       if (data.type === 'renegotiate_needed') {
-        // 他ユーザーの入室時に再ネゴシエーションを実行
         await client.createAndExchange('server_peer', SIGNAL_URL, token, { room_id: locationName });
       }
     };
-    return () => eventSource.close();
+    return () => {
+      eventSource.close();
+      streams.local?.getTracks().forEach(t => t.stop());
+    };
   }, [joinSession, locationName, token, SSE_URL, SIGNAL_URL, client]);
 
   return (
-    <div className="vc-container">
+    <div className="vc-wrapper">
       <header className="vc-header">
         <div className={`status-badge ${status.isError ? 'error' : ''}`}>{status.message}</div>
-        <div className="user-id-badge">ID: {userId}</div>
+        <div className="info">ID: {userId}</div>
       </header>
 
       <main className="video-grid">
-        {/* カメラ映像 */}
-        {streams.local && <VideoItem stream={streams.local} label="あなた" isMuted={true} />}
-        {/* 画面共有映像 */}
-        {streams.screen && <VideoItem stream={streams.screen} label="共有中の画面" isMuted={true} />}
-        {/* 他の参加者 */}
+        {streams.local && <VideoItem stream={streams.local} label={`${userId} (自分)`} isMuted={true} />}
+        {streams.screen && <VideoItem stream={streams.screen} label="共有画面" isMuted={true} />}
         {Object.entries(streams.remotes).map(([id, stream]) => (
           <VideoItem key={id} stream={stream} label={id} />
         ))}
       </main>
 
-      <footer className="control-bar">
-        <button 
-          onClick={toggleScreenShare} 
-          className={`btn-screen ${streams.screen ? 'active' : ''}`}
-        >
+      <footer className="controls">
+        <button onClick={() => toggleMedia('mic')} className={mediaStates.mic ? 'btn' : 'btn off'}>
+          {mediaStates.mic ? 'マイクON' : 'マイク消音'}
+        </button>
+        <button onClick={() => toggleMedia('cam')} className={mediaStates.cam ? 'btn' : 'btn off'}>
+          {mediaStates.cam ? 'カメラON' : 'カメラOFF'}
+        </button>
+        <button onClick={toggleScreen} className={streams.screen ? 'btn active' : 'btn'}>
           {streams.screen ? '共有停止' : '画面共有'}
         </button>
       </footer>
 
       <style>{`
-        .vc-container { display: flex; flex-direction: column; height: 100vh; background: #0f172a; color: white; }
-        .vc-header { display: flex; justify-content: space-between; padding: 10px 20px; background: #1e293b; align-items: center; }
-        .status-badge { background: #3b82f6; padding: 5px 15px; border-radius: 20px; font-size: 0.8rem; }
+        .vc-wrapper { display: flex; flex-direction: column; height: 100vh; background: #0f172a; color: white; }
+        .vc-header { display: flex; justify-content: space-between; padding: 12px 24px; background: #1e293b; align-items: center; }
+        .status-badge { background: #3b82f6; padding: 6px 16px; border-radius: 20px; font-size: 0.8rem; }
         .status-badge.error { background: #ef4444; }
-        .user-id-badge { font-size: 0.9rem; opacity: 0.8; }
-        .video-grid { flex: 1; display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 15px; padding: 15px; overflow-y: auto; }
-        .control-bar { display: flex; justify-content: center; padding: 15px; background: #1e293b; gap: 20px; }
-        .btn-screen { padding: 10px 25px; border-radius: 8px; border: none; cursor: pointer; font-weight: 600; background: #475569; color: white; transition: 0.2s; }
-        .btn-screen.active { background: #ef4444; }
-        .btn-screen:hover { opacity: 0.9; }
+        .video-grid { flex: 1; display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; padding: 16px; overflow-y: auto; align-content: start; }
+        .controls { display: flex; justify-content: center; gap: 16px; padding: 20px; background: #1e293b; }
+        .btn { background: #475569; border: none; color: white; padding: 10px 20px; border-radius: 8px; cursor: pointer; transition: 0.2s; font-weight: 600; }
+        .btn.off { background: #ef4444; }
+        .btn.active { background: #10b981; }
+        .btn:hover { opacity: 0.85; }
       `}</style>
     </div>
   );
